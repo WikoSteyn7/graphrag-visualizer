@@ -41,6 +41,11 @@ export interface CustomNode extends NodeObject {
     source_text?: string;
     text_unit_id?: string;
     covariate_type?: string;
+    isDragging?: boolean;
+    fx?: number;
+    fy?: number;
+    __baseX?: number;
+    __baseY?: number;
   }
   
 export interface CustomLink extends LinkObject {

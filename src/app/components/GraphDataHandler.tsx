@@ -79,16 +79,9 @@ const GraphDataHandler: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    // **Set tab index based on the current path**
     switch (location.pathname) {
-      case "/upload":
-        setTabIndex(0);
-        break;
-      case "/graph":
-        setTabIndex(1);
-        break;
       case "/data":
-        setTabIndex(2);
+        setTabIndex(1);
         break;
       default:
         setTabIndex(0);
@@ -111,9 +104,8 @@ const GraphDataHandler: React.FC = () => {
 
   const handleChange = (event: React.ChangeEvent<{}>, newValue: number) => {
     setTabIndex(newValue);
-    let path = "/upload";
-    if (newValue === 1) path = "/graph";
-    if (newValue === 2) path = "/data";
+    let path = "/graph";
+    if (newValue === 1) path = "/data";
     navigate(path);
     ReactGA.send({
       hitType: "event",
@@ -138,19 +130,6 @@ const GraphDataHandler: React.FC = () => {
         <Tab label="Data Tables" />
       </Tabs>
       {tabIndex === 0 && (
-        <Container
-          maxWidth="md"
-          sx={{
-            mt: 3,
-            display: "flex",
-            flexDirection: "column",
-          }}
-        >
-          <DropZone {...{ getRootProps, getInputProps, isDragActive }} />
-          <Introduction />
-        </Container>
-      )}
-      {tabIndex === 1 && (
         <Box
           p={3}
           sx={{
@@ -193,7 +172,7 @@ const GraphDataHandler: React.FC = () => {
         </Box>
       )}
 
-      {tabIndex === 2 && (
+      {tabIndex === 1 && (
         <Box sx={{ display: "flex", height: "calc(100vh - 64px)" }}>
           <DataTableContainer
             selectedTable={selectedTable}

@@ -86,7 +86,7 @@ const GLASS_EFFECT = {
 };
 
 const PARTICLE_EFFECT = {
-  particleSize: 4,
+  particleSize: 2,
   particleSpeed: 0.2,
   particleCount: 6,
   particleOpacity: 0.8,
@@ -95,10 +95,10 @@ const PARTICLE_EFFECT = {
 };
 
 const ANIMATION_CONFIG = {
-  amplitude: 0.5,     // Reduced movement amplitude
-  frequency: 0.001,   // Slower, smoother movement
-  phaseShift: 0.3,    // Reduced phase shift
-  centerPull: 0.05    // Gentler center pull
+  amplitude: 0.3,      // Subtle movement
+  frequency: 0.0003,   // Very slow frequency for smooth motion
+  phaseShift: 0.5,     // Phase shift for variation
+  centerPull: 0.02     // Gentle center pull
 };
 
 const createOscillation = (time: number, seed: number) => {
@@ -108,11 +108,36 @@ const createOscillation = (time: number, seed: number) => {
 };
 
 const NODE_COLORS = {
-  ORGANIZATION: '#4CAF50',  // Green
-  EVENT: '#2196F3',        // Blue
-  GEO: '#9C27B0',         // Purple
-  PERSON: '#FF9800',      // Orange
-  default: '#607D8B'       // Blue Grey
+  ORGANIZATION: {
+    primary: '#FFB74D',    // Warm orange-gold
+    secondary: '#FF9800',  // Deep orange
+    highlight: '#FFA726',  // Bright orange
+    glow: '#FFF3E0'       // Light warm glow
+  },
+  EVENT: {
+    primary: '#4FC3F7',    // Bright blue
+    secondary: '#0288D1',  // Deep blue
+    highlight: '#29B6F6',  // Electric blue
+    glow: '#E1F5FE'       // Light blue glow
+  },
+  GEO: {
+    primary: '#81C784',    // Fresh green
+    secondary: '#388E3C',  // Forest green
+    highlight: '#66BB6A',  // Vibrant green
+    glow: '#E8F5E9'       // Light green glow
+  },
+  PERSON: {
+    primary: '#E57373',    // Coral red
+    secondary: '#D32F2F',  // Deep red
+    highlight: '#EF5350',  // Bright red
+    glow: '#FFEBEE'       // Light red glow
+  },
+  default: {
+    primary: '#B39DDB',    // Soft purple
+    secondary: '#673AB7',  // Deep purple
+    highlight: '#9575CD',  // Medium purple
+    glow: '#EDE7F6'       // Light purple glow
+  }
 };
 
 const ANIMATION_3D = {
@@ -122,6 +147,15 @@ const ANIMATION_3D = {
   particleSpeed: 0.02,
   cameraDistance: 300,
   autoRotate: true
+};
+
+const CLOUD_EFFECT = {
+  radius: NODE_R * 4,           // Increased radius
+  color: 'rgba(103, 58, 183, ', // Pure color without alpha
+  blur: 20,                     // Increased blur
+  pulseSpeed: 0.0005,          // Slower pulse
+  minOpacity: 0.1,             // Minimum opacity
+  maxOpacity: 0.3              // Maximum opacity
 };
 
 const GraphViewer: React.FC<GraphViewerProps> = ({
@@ -197,6 +231,12 @@ const GraphViewer: React.FC<GraphViewerProps> = ({
 
   const [animationFrame, setAnimationFrame] = useState<number>(0);
 
+  const [animationStartTime, setAnimationStartTime] = useState(Date.now());
+
+  const resetAnimation = useCallback(() => {
+    setAnimationStartTime(Date.now());
+  }, []);
+
   useEffect(() => {
     if (graphType === '3d' && graphRef.current) {
       const renderer = new WebGLRenderer({
@@ -228,50 +268,39 @@ const GraphViewer: React.FC<GraphViewerProps> = ({
   }, [graphType]);
 
   useEffect(() => {
-    let frameId: number;
-    let lastTime = performance.now();
-    const fps = 60;
-    const frameInterval = 1000 / fps;
-
-    const animate = (currentTime: number) => {
-      frameId = requestAnimationFrame(animate);
-
-      const deltaTime = currentTime - lastTime;
-      if (deltaTime < frameInterval) return;
-
-      if (graphRef.current && graphType === "2d" && graphRef.current._graphData) {
-        const graphData = graphRef.current._graphData;
-        if (!graphData || !Array.isArray(graphData.nodes)) return;
-
-        const time = currentTime * 0.001; // Convert to seconds
+    let animationFrameId: number;
+    const animate = () => {
+      if (graphRef.current && graphType === "2d") {
+        const nodes = graphRef.current._graphData?.nodes;
+        if (!nodes) return;
         
-        graphData.nodes.forEach((node: CustomNode) => {
-          if (!node.x || !node.y) return;
+        const time = Date.now() - animationStartTime;
+        
+        nodes.forEach((node: CustomNode) => {
+          if (!node.x || !node.y || node.isDragging) return;
           
-          if (!node.initialX) {
-            node.initialX = node.x;
-            node.initialY = node.y;
-            node.animationSeed = parseInt(node.id.toString(), 36) % 1000 / 1000;
-          }
-
-          const xOffset = createOscillation(time, node.animationSeed!);
-          const yOffset = createOscillation(time + 1000, node.animationSeed!);
-
-          node.x = node.initialX + xOffset;
-          node.y = node.initialY + yOffset;
+          if (!node.__baseX) node.__baseX = node.x;
+          if (!node.__baseY) node.__baseY = node.y;
+          
+          const seed = node.id.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+          
+          const xOscillation = Math.sin(time * 0.0005 + seed) * 0.2;
+          const yOscillation = Math.cos(time * 0.0005 + seed) * 0.2;
+          
+          node.x = node.__baseX + xOscillation;
+          node.y = node.__baseY + yOscillation;
         });
-
+        
         graphRef.current.refresh();
-        lastTime = currentTime - (deltaTime % frameInterval);
       }
+      animationFrameId = requestAnimationFrame(animate);
     };
 
-    frameId = requestAnimationFrame(animate);
-    
+    animate();
     return () => {
-      cancelAnimationFrame(frameId);
+      if (animationFrameId) cancelAnimationFrame(animationFrameId);
     };
-  }, [graphType]);
+  }, [graphType, animationStartTime]);
 
   const clusterNodes = (nodes: CustomNode[], threshold: number) => {
     const clusters: { [key: string]: CustomNode[] } = {};
@@ -336,10 +365,35 @@ const GraphViewer: React.FC<GraphViewerProps> = ({
 
   useEffect(() => {
     if (!workerRunning && data.nodes.length > 1000) {
+      // Create a serializable version of the data
+      const serializableData = {
+        nodes: data.nodes.map((node: CustomNode) => ({
+          id: node.id,
+          uuid: node.uuid,
+          name: node.name,
+          type: node.type,
+          x: node.x,
+          y: node.y
+        })),
+        links: data.links.map((link: CustomLink) => ({
+          source: typeof link.source === 'object' ? (link.source as CustomNode).id : link.source,
+          target: typeof link.target === 'object' ? (link.target as CustomNode).id : link.target,
+          type: link.type
+        }))
+      };
+
       const worker = new Worker(`${process.env.PUBLIC_URL}/forceWorker.ts`);
-      worker.postMessage(data);
+      worker.postMessage(serializableData);
       worker.onmessage = (event) => {
-        setGraphData(event.data);
+        const updatedData = {
+          ...data,
+          nodes: data.nodes.map((node: CustomNode) => ({
+            ...node,
+            x: (event.data.nodes as Array<{ id: string; x: number; y: number }>).find(n => n.id === node.id)?.x || node.x,
+            y: (event.data.nodes as Array<{ id: string; x: number; y: number }>).find(n => n.id === node.id)?.y || node.y
+          }))
+        };
+        setGraphData(updatedData);
         setWorkerRunning(false);
       };
       setWorkerRunning(true);
@@ -525,79 +579,128 @@ const GraphViewer: React.FC<GraphViewerProps> = ({
       const { x, y } = node;
       if (!x || !y) return;
 
+      // Draw cloud effect for groups of nodes
+      const nearbyNodes = graphRef.current?._graphData?.nodes?.filter((n: CustomNode) => {
+        if (n === node || !n.x || !n.y) return false;
+        const dx = n.x - x;
+        const dy = n.y - y;
+        return Math.sqrt(dx * dx + dy * dy) < CLOUD_EFFECT.radius;
+      }) || [];
+
+      if (nearbyNodes.length > 1) { // Changed threshold to 1
+        ctx.save();
+        ctx.beginPath();
+        
+        // Create cloud path
+        const time = Date.now() * CLOUD_EFFECT.pulseSpeed;
+        const cloudRadius = CLOUD_EFFECT.radius * (1 + Math.sin(time) * 0.1);
+        
+        // Calculate opacity based on number of nearby nodes
+        const opacity = Math.min(
+          CLOUD_EFFECT.minOpacity + (nearbyNodes.length * 0.05),
+          CLOUD_EFFECT.maxOpacity
+        );
+        
+        ctx.filter = `blur(${CLOUD_EFFECT.blur}px)`;
+        ctx.fillStyle = CLOUD_EFFECT.color + opacity + ')';
+        
+        // Draw multiple overlapping circles for denser effect
+        for (let i = 0; i < 3; i++) {
+          ctx.beginPath();
+          ctx.arc(x, y, cloudRadius * (0.8 + i * 0.2), 0, 2 * Math.PI);
+          ctx.fill();
+        }
+        
+        ctx.filter = 'none';
+        ctx.restore();
+      }
+
       const nodeType = node.type || 'default';
-      const baseColor = NODE_COLORS[nodeType as keyof typeof NODE_COLORS] || NODE_COLORS.default;
+      const colors = NODE_COLORS[nodeType as keyof typeof NODE_COLORS] || NODE_COLORS.default;
       const isHighlighted = highlightNodes.has(node);
-      const isHovered = node === hoverNode;
+      const isDark = theme.palette.mode === 'dark';
 
       ctx.save();
-
-      // Base shadow
-      ctx.shadowColor = GLASS_EFFECT.shadowColor;
-      ctx.shadowBlur = GLASS_EFFECT.shadowBlur;
-      ctx.shadowOffsetX = 2;
-      ctx.shadowOffsetY = 2;
-
-      // Main node
-      ctx.beginPath();
-      ctx.arc(x, y, GLASS_EFFECT.outerRadius, 0, 2 * Math.PI);
       
-      const gradient = ctx.createRadialGradient(
-        x - GLASS_EFFECT.gradientOffset,
-        y - GLASS_EFFECT.gradientOffset,
+      const radius = NODE_R;
+      
+      // Outer glow
+      ctx.shadowColor = colors.glow;
+      ctx.shadowBlur = isHighlighted ? 20 : 15;
+      ctx.shadowOffsetX = 0;
+      ctx.shadowOffsetY = 0;
+
+      // Base layer with frosted effect
+      const baseGradient = ctx.createRadialGradient(
+        x - radius * 0.3,
+        y - radius * 0.3,
         0,
         x,
         y,
-        GLASS_EFFECT.outerRadius
+        radius * 1.2
       );
 
       if (isHighlighted) {
-        gradient.addColorStop(0, baseColor);
-        gradient.addColorStop(0.7, baseColor + 'dd');
-        gradient.addColorStop(1, baseColor + 'aa');
+        baseGradient.addColorStop(0, `${colors.highlight}FF`);
+        baseGradient.addColorStop(0.5, `${colors.primary}EE`);
+        baseGradient.addColorStop(1, `${colors.secondary}DD`);
       } else {
-        const isDark = theme.palette.mode === 'dark';
-        gradient.addColorStop(0, baseColor);
-        gradient.addColorStop(1, baseColor + '44');
+        baseGradient.addColorStop(0, `${colors.primary}${isDark ? 'DD' : 'FF'}`);
+        baseGradient.addColorStop(0.7, `${colors.secondary}${isDark ? 'BB' : 'DD'}`);
+        baseGradient.addColorStop(1, `${colors.secondary}${isDark ? '99' : 'BB'}`);
       }
 
-      ctx.fillStyle = gradient;
+      // Draw base
+      ctx.beginPath();
+      ctx.arc(x, y, radius, 0, 2 * Math.PI);
+      ctx.fillStyle = baseGradient;
       ctx.fill();
 
-      // Subtle border
-      ctx.strokeStyle = isHighlighted 
-        ? `${baseColor}cc`
-        : theme.palette.mode === 'dark' 
-          ? 'rgba(255,255,255,0.2)' 
-          : 'rgba(0,0,0,0.1)';
-      ctx.lineWidth = GLASS_EFFECT.borderWidth;
-      ctx.stroke();
+      // Frosted glass overlay
+      const frostGradient = ctx.createLinearGradient(
+        x - radius,
+        y - radius,
+        x + radius,
+        y + radius
+      );
+      
+      if (isDark) {
+        frostGradient.addColorStop(0, 'rgba(255,255,255,0.15)');
+        frostGradient.addColorStop(0.5, 'rgba(255,255,255,0.05)');
+        frostGradient.addColorStop(1, 'rgba(255,255,255,0.02)');
+      } else {
+        frostGradient.addColorStop(0, 'rgba(255,255,255,0.5)');
+        frostGradient.addColorStop(0.5, 'rgba(255,255,255,0.2)');
+        frostGradient.addColorStop(1, 'rgba(255,255,255,0.1)');
+      }
 
-      // Top highlight for depth
       ctx.beginPath();
-      ctx.arc(
-        x - GLASS_EFFECT.gradientOffset * 0.5,
-        y - GLASS_EFFECT.gradientOffset * 0.5,
-        GLASS_EFFECT.innerRadius * 0.7,
-        0,
-        2 * Math.PI
-      );
+      ctx.arc(x, y, radius, 0, 2 * Math.PI);
+      ctx.fillStyle = frostGradient;
+      ctx.fill();
+
+      // Top highlight for 3D effect
       const highlightGradient = ctx.createRadialGradient(
-        x - GLASS_EFFECT.gradientOffset * 0.5,
-        y - GLASS_EFFECT.gradientOffset * 0.5,
-        0,
-        x - GLASS_EFFECT.gradientOffset * 0.5,
-        y - GLASS_EFFECT.gradientOffset * 0.5,
-        GLASS_EFFECT.innerRadius * 0.7
+        x - radius * 0.5,
+        y - radius * 0.5,
+        radius * 0.1,
+        x - radius * 0.3,
+        y - radius * 0.3,
+        radius * 0.8
       );
-      highlightGradient.addColorStop(0, 'rgba(255,255,255,0.15)');
+      
+      highlightGradient.addColorStop(0, 'rgba(255,255,255,0.4)');
+      highlightGradient.addColorStop(0.5, 'rgba(255,255,255,0.1)');
       highlightGradient.addColorStop(1, 'rgba(255,255,255,0)');
+
+      ctx.beginPath();
+      ctx.arc(x, y, radius, 0, 2 * Math.PI);
       ctx.fillStyle = highlightGradient;
       ctx.fill();
 
       ctx.restore();
     },
-    [hoverNode, highlightNodes, theme.palette.mode]
+    [highlightNodes, theme.palette.mode, graphRef]
   );
 
   const handleSearch = () => {
@@ -819,16 +922,16 @@ const GraphViewer: React.FC<GraphViewerProps> = ({
         transparent: true,
         opacity: 0.9
       });
-      const sphere = new THREE.Mesh(geometry, material);
-      return sphere;
+      return new THREE.Mesh(geometry, material);
     }
 
     const nodeEl = document.createElement("div");
     nodeEl.textContent = node.name || node.id;
-    nodeEl.style.color = node.color || '#ffffff';
-    nodeEl.style.padding = "2px 4px";
+    nodeEl.style.color = '#ffffff';
+    nodeEl.style.backgroundColor = 'rgba(0, 0, 0, 0.8)';
+    nodeEl.style.padding = "2px 6px";
     nodeEl.style.borderRadius = "4px";
-    nodeEl.style.fontSize = "10px";
+    nodeEl.style.fontSize = "12px";
     nodeEl.className = "node-label";
 
     const label = new CSS2DObject(nodeEl);
@@ -888,6 +991,11 @@ const GraphViewer: React.FC<GraphViewerProps> = ({
     };
   }, [optimizedNodes, data.links, includeTextUnits, includeCommunities, includeCovariates, includeDocuments]);
 
+  const handleZoom = useCallback((zoom: any) => {
+    setGraphZoom(zoom.k);
+    setAnimationStartTime(Date.now()); // Restart animation on zoom
+  }, []);
+
   return (
     <Box
       sx={{
@@ -923,42 +1031,7 @@ const GraphViewer: React.FC<GraphViewerProps> = ({
           >
             Search Nodes/Links
           </Button>
-          {/* <FormControlLabel
-            control={
-              <Switch
-                checked={graphType === "3d"}
-                onChange={onToggleGraphType}
-              />
-            }
-            label="3D View"
-          /> */}
-          {/* <FormControlLabel
-            control={
-              <Switch
-                checked={showLabels}
-                onChange={() => setShowLabels(!showLabels)}
-              />
-            }
-            label="Show Node Labels"
-          />
-          <FormControlLabel
-            control={
-              <Switch
-                checked={showLinkLabels}
-                onChange={() => setShowLinkLabels(!showLinkLabels)}
-              />
-            }
-            label="Show Relationship Labels"
-          />
-          <FormControlLabel
-            control={
-              <Switch
-                checked={showHighlight}
-                onChange={() => setShowHighlight(!showHighlight)}
-              />
-            }
-            label="Show Highlight"
-          /> */}
+          
           <Tooltip title={isFullscreen ? "Exit Full Screen" : "Full Screen"}>
             <IconButton onClick={onToggleFullscreen} color="inherit">
               {isFullscreen ? <FullscreenExitIcon /> : <FullscreenIcon />}
@@ -1131,7 +1204,7 @@ const GraphViewer: React.FC<GraphViewerProps> = ({
             if (showHighlight && highlightLinks.has(link)) {
               return 2;
             }
-            return theme.palette.mode === 'dark' ? 0.8 : 0.6;
+            return theme.palette.mode === 'dark' ? 0.6 : 0.4;
           }}
           linkColor={(link) => {
             if (showHighlight && highlightLinks.has(link)) {
@@ -1152,7 +1225,7 @@ const GraphViewer: React.FC<GraphViewerProps> = ({
           }}
           nodeColor={(node: CustomNode) => {
             const nodeType = node.type || 'default';
-            return NODE_COLORS[nodeType as keyof typeof NODE_COLORS] || NODE_COLORS.default;
+            return NODE_COLORS[nodeType as keyof typeof NODE_COLORS].primary;
           }}
           onNodeHover={showHighlight ? handleNodeHover : undefined}
           onLinkHover={showHighlight ? handleLinkHover : undefined}
@@ -1214,10 +1287,23 @@ const GraphViewer: React.FC<GraphViewerProps> = ({
           d3VelocityDecay={0.3}      // Smoother movement
           warmupTicks={50}           // Reduced initial simulation
           cooldownTicks={1000}       // Longer cooldown for stability
-          enableNodeDrag={false}     // Disable drag for smoother experience
-          onZoom={debounce((zoom) => {  // Debounced zoom handler
-            setGraphZoom(zoom.k);
-          }, 100)}
+          enableNodeDrag={true}     // Disable drag for smoother experience
+          onZoom={handleZoom}
+          onNodeDrag={(node, translate) => {
+            node.isDragging = true;
+            node.fx = node.x;
+            node.fy = node.y;
+            node.__baseX = node.x;
+            node.__baseY = node.y;
+          }}
+          onNodeDragEnd={(node) => {
+            node.isDragging = false;
+            node.fx = undefined;
+            node.fy = undefined;
+            node.__baseX = node.x;
+            node.__baseY = node.y;
+            resetAnimation(); // Reset animation when drag ends
+          }}
         />
       ) : (
         <ForceGraph3D
@@ -1231,9 +1317,10 @@ const GraphViewer: React.FC<GraphViewerProps> = ({
           enableNavigationControls={true}
           showNavInfo={false}
           nodeThreeObject={(node: CustomNode) => {
+            const nodeType = node.type || 'default';
             const geometry = new THREE.SphereGeometry(NODE_R, 32, 32);
             const material = new THREE.MeshPhongMaterial({
-              color: NODE_COLORS[node.type as keyof typeof NODE_COLORS] || NODE_COLORS.default,
+              color: NODE_COLORS[nodeType as keyof typeof NODE_COLORS].primary,
               transparent: true,
               opacity: 0.8,
               shininess: 100
@@ -1246,7 +1333,7 @@ const GraphViewer: React.FC<GraphViewerProps> = ({
             alpha: true
           }}
           linkDirectionalParticles={8}
-          linkDirectionalParticleWidth={3}
+          linkDirectionalParticleWidth={2}
           linkDirectionalParticleSpeed={0.02}
           linkDirectionalParticleColor={() => '#ffffff'}
           linkOpacity={0.3}
