@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef, useEffect } from "react";
+import React, { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import ForceGraph2D from "react-force-graph-2d";
 import ForceGraph3D from "react-force-graph-3d";
 import {
@@ -17,6 +17,7 @@ import {
   Tooltip,
   Typography,
   useTheme,
+  CircularProgress,
 } from "@mui/material";
 import FullscreenIcon from "@mui/icons-material/Fullscreen";
 import FullscreenExitIcon from "@mui/icons-material/FullscreenExit";
@@ -34,12 +35,13 @@ import { SearchResult } from "../models/search-result";
 import agent from "../api/agent";
 import APISearchDrawer from "./APISearchDrawer";
 import SpriteText from "three-spritetext";
-
-type Coords = {
-  x: number;
-  y: number;
-  z: number;
-};
+import { TextureLoader } from 'three';
+import { debounce } from 'lodash';
+import { WebGLRenderer } from 'three';
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer';
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass';
+import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass';
+import { Vector2 } from 'three';
 
 interface GraphViewerProps {
   data: CustomGraphData;
@@ -62,6 +64,13 @@ interface GraphViewerProps {
 }
 
 const NODE_R = 8;
+const padding = 4;
+const BLOOM_PARAMS = {
+  exposure: 1,
+  bloomStrength: 1.5,
+  bloomThreshold: 0.1,
+  bloomRadius: 0.8
+};
 
 const GraphViewer: React.FC<GraphViewerProps> = ({
   data,
@@ -121,6 +130,101 @@ const GraphViewer: React.FC<GraphViewerProps> = ({
 
   const initialGraphData = useRef<CustomGraphData>(data);
 
+  const [graphZoom, setGraphZoom] = useState(1);
+
+  const [workerRunning, setWorkerRunning] = useState(false);
+
+  const [clusterThreshold] = useState(100);
+
+  const textureLoader = useMemo(() => new TextureLoader(), []);
+
+  const [composer, setComposer] = useState<EffectComposer | null>(null);
+  const [renderer, setRenderer] = useState<WebGLRenderer | null>(null);
+
+  const [visibleNodes, setVisibleNodes] = useState<CustomNode[]>([]);
+
+  useEffect(() => {
+    if (graphType === '3d' && graphRef.current) {
+      const renderer = new WebGLRenderer({
+        antialias: true,
+        alpha: true,
+        powerPreference: 'high-performance'
+      });
+      
+      const composer = new EffectComposer(renderer);
+      const renderPass = new RenderPass(graphRef.current.scene(), graphRef.current.camera());
+      const bloomPass = new UnrealBloomPass(
+        new Vector2(window.innerWidth, window.innerHeight),
+        BLOOM_PARAMS.bloomStrength,
+        BLOOM_PARAMS.bloomRadius,
+        BLOOM_PARAMS.bloomThreshold
+      );
+
+      composer.addPass(renderPass);
+      composer.addPass(bloomPass);
+
+      setRenderer(renderer);
+      setComposer(composer);
+
+      return () => {
+        composer.dispose();
+        renderer.dispose();
+      };
+    }
+  }, [graphType]);
+
+  const clusterNodes = (nodes: CustomNode[], threshold: number) => {
+    const clusters: { [key: string]: CustomNode[] } = {};
+    nodes.forEach((node) => {
+      const clusterKey = `${Math.round(node.x! / threshold)},${Math.round(node.y! / threshold)}`;
+      if (!clusters[clusterKey]) clusters[clusterKey] = [];
+      clusters[clusterKey].push(node);
+    });
+    
+    return Object.values(clusters).map((cluster) => {
+      if (cluster.length === 1) return cluster[0];
+      return {
+        id: `cluster-${cluster.map(n => n.id).join('-')}`,
+        uuid: `cluster-${cluster.map(n => n.uuid).join('-')}`,
+        name: `Cluster (${cluster.length})`,
+        type: 'cluster',
+        size: Math.sqrt(cluster.length) * NODE_R,
+        cluster: true,
+        nodes: cluster
+      } as CustomNode;
+    });
+  };
+
+  const optimizedNodes = useMemo(() => 
+    data.nodes.map(node => ({
+      ...node,
+      // Pre-calculate frequently accessed properties
+      degree: node.neighbors?.length || 0,
+      // Remove unnecessary properties for rendering
+      __threeObj: undefined,
+      index: undefined
+    })), [data.nodes]);
+    
+  const clusteredData = useMemo(() => ({
+    nodes: graphZoom < 0.5 ? clusterNodes(data.nodes, clusterThreshold) : data.nodes,
+    links: data.links
+  }), [data, graphZoom, clusterThreshold]);
+
+  const graphDataMemo = useMemo(() => ({
+    nodes: optimizedNodes,
+    links: data.links
+  }), [optimizedNodes, data.links]);
+
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    setIsLoading(true);
+    const timer = setTimeout(() => {
+      setIsLoading(false);
+    }, 100);
+    return () => clearTimeout(timer);
+  }, [data]);
+
   useEffect(() => {
     setGraphData(data);
     initialGraphData.current = data;
@@ -130,7 +234,44 @@ const GraphViewer: React.FC<GraphViewerProps> = ({
     checkServerStatus();
   }, []);
 
+  useEffect(() => {
+    if (!workerRunning && data.nodes.length > 1000) {
+      const worker = new Worker(`${process.env.PUBLIC_URL}/forceWorker.ts`);
+      worker.postMessage(data);
+      worker.onmessage = (event) => {
+        setGraphData(event.data);
+        setWorkerRunning(false);
+      };
+      setWorkerRunning(true);
+    }
+  }, [data, workerRunning]);
+
+  useEffect(() => {
+    const chunkSize = 100;
+    let currentIndex = 0;
+    
+    const addNodes = () => {
+      const nextNodes = data.nodes.slice(currentIndex, currentIndex + chunkSize);
+      setVisibleNodes(prev => [...prev, ...nextNodes]);
+      currentIndex += chunkSize;
+      
+      if (currentIndex < data.nodes.length) {
+        requestAnimationFrame(addNodes);
+      }
+    };
+    
+    setVisibleNodes([]); // Reset when data changes
+    requestAnimationFrame(addNodes);
+  }, [data]);
+
   const toggleApiDrawer = (open: boolean) => () => {
+    if (open) {
+      onIncludeTextUnitsChange(true);
+      onIncludeCommunitiesChange(true);
+      if (hasCovariates) {
+        onIncludeCovariatesChange(true);
+      }
+    }
     setApiDrawerOpen(open);
   };
 
@@ -435,13 +576,16 @@ const GraphViewer: React.FC<GraphViewerProps> = ({
   const getlinkDirectionalParticleColor = (link: CustomLink) =>
     theme.palette.mode === "dark" ? "lightgray" : "gray";
 
-  const renderNodeLabel = (node: CustomNode, ctx: CanvasRenderingContext2D) => {
-    if (!showLabels) return; // Only render the label if showLabels is true
+  const renderNodeLabel = useCallback((node: CustomNode, ctx: CanvasRenderingContext2D) => {
+    if (!showLabels || graphZoom < 0.7) return;
 
     const label = node.name || "";
-    const fontSize = 4;
-    const padding = 2;
+    const fontSize = Math.min(4 * graphZoom, 8);
     ctx.font = `${fontSize}px Sans-Serif`;
+
+    // Use alpha based on zoom level for smooth fade in/out
+    const alpha = Math.min((graphZoom - 0.7) / 0.3, 1);
+    ctx.globalAlpha = alpha;
 
     // Set the styles based on the theme mode
     const backgroundColor =
@@ -497,28 +641,37 @@ const GraphViewer: React.FC<GraphViewerProps> = ({
       ctx.textBaseline = "middle";
       ctx.fillText(label, node.x, node.y);
     }
-  };
 
-  const nodeThreeObject = (node: CustomNode) => {
+    ctx.globalAlpha = 1; // Reset alpha
+  }, [showLabels, graphZoom]);
+
+  const nodeThreeObject = useCallback((node: CustomNode) => {
     if (!showLabels) {
-      return new THREE.Object3D();
+      const geometry = new THREE.SphereGeometry(NODE_R * 0.8, 16, 16);
+      const material = new THREE.MeshPhongMaterial({
+        color: node.color || '#ffffff',
+        emissive: node.color || '#ffffff',
+        emissiveIntensity: 0.3,
+        shininess: 50,
+        transparent: true,
+        opacity: 0.9
+      });
+      const sphere = new THREE.Mesh(geometry, material);
+      return sphere;
     }
 
-    try {
-      const nodeEl = document.createElement("div");
-      nodeEl.textContent = node.name || node.id; // Use either name or id for the label
-      nodeEl.style.color = node.color;
-      nodeEl.style.padding = "2px 4px";
-      nodeEl.style.borderRadius = "4px";
-      nodeEl.style.fontSize = "10px";
-      nodeEl.className = "node-label";
+    const nodeEl = document.createElement("div");
+    nodeEl.textContent = node.name || node.id;
+    nodeEl.style.color = node.color || '#ffffff';
+    nodeEl.style.padding = "2px 4px";
+    nodeEl.style.borderRadius = "4px";
+    nodeEl.style.fontSize = "10px";
+    nodeEl.className = "node-label";
 
-      return new CSS2DObject(nodeEl);
-    } catch (error) {
-      console.error("Error creating 3D object:", error);
-      return new THREE.Object3D(); // Fallback in case of error
-    }
-  };
+    const label = new CSS2DObject(nodeEl);
+    label.position.set(0, NODE_R, 0);
+    return label;
+  }, [showLabels]);
 
   const localSearchEnabled = hasCovariates
     ? includeTextUnits && includeCommunities && includeCovariates
@@ -528,6 +681,20 @@ const GraphViewer: React.FC<GraphViewerProps> = ({
   //   setGraphData(initialGraphData.current);
   //   setApiSearchResults(null);
   // };
+
+  const debouncedHandleNodeHover = useCallback(
+    debounce((node: CustomNode | null) => {
+      handleNodeHover(node);
+    }, 100),
+    [handleNodeHover]
+  );
+
+  const debouncedHandleZoom = useCallback(
+    debounce((zoom: { k: number }) => {
+      setGraphZoom(zoom.k);
+    }, 100),
+    []
+  );
 
   return (
     <Box
@@ -753,28 +920,28 @@ const GraphViewer: React.FC<GraphViewerProps> = ({
       {graphType === "2d" ? (
         <ForceGraph2D
           ref={graphRef}
-          graphData={graphData}
+          graphData={graphDataMemo}
           nodeAutoColorBy="type"
           nodeRelSize={NODE_R}
           autoPauseRedraw={false}
-          linkWidth={(link) =>
-            showHighlight && highlightLinks.has(link) ? 5 : 1
-          }
           linkDirectionalParticles={showHighlight ? 4 : 0}
-          linkDirectionalParticleWidth={(link) =>
-            showHighlight && highlightLinks.has(link) ? 4 : 0
-          }
-          linkDirectionalParticleColor={
-            showHighlight ? getlinkDirectionalParticleColor : undefined
-          }
-          nodeCanvasObjectMode={(node) =>
-            showHighlight && highlightNodes.has(node)
+          linkWidth={(link) => showHighlight && highlightLinks.has(link) ? 2 : 1}
+          linkColor={(link) => {
+            if (showHighlight && highlightLinks.has(link)) {
+              return theme.palette.mode === 'dark' ? '#ffffff' : '#000000';
+            }
+            return theme.palette.mode === 'dark' ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.2)';
+          }}
+          nodeCanvasObjectMode={(node) => {
+            if (graphZoom < 0.5) return undefined;
+            return showHighlight && highlightNodes.has(node)
               ? "before"
               : showLabels
               ? "after"
-              : undefined
-          }
+              : undefined;
+          }}
           nodeCanvasObject={(node, ctx) => {
+            if (graphZoom < 0.5) return;
             if (showHighlight && highlightNodes.has(node)) {
               paintRing(node as CustomNode, ctx);
             }
@@ -782,87 +949,57 @@ const GraphViewer: React.FC<GraphViewerProps> = ({
               renderNodeLabel(node as CustomNode, ctx);
             }
           }}
-          linkCanvasObjectMode={() => (showLinkLabels ? "after" : undefined)}
-          linkCanvasObject={(link, ctx) => {
-            if (showLinkLabels) {
-              const label = link.type || "";
-              const fontSize = 4;
-              ctx.font = `${fontSize}px Sans-Serif`;
-              ctx.fillStyle =
-                theme.palette.mode === "dark" ? "lightgray" : "darkgray";
-              const source =
-                typeof link.source !== "string"
-                  ? (link.source as CustomNode)
-                  : null;
-              const target =
-                typeof link.target !== "string"
-                  ? (link.target as CustomNode)
-                  : null;
-
-              if (
-                source &&
-                target &&
-                source.x !== undefined &&
-                target.x !== undefined &&
-                source.y !== undefined &&
-                target.y !== undefined
-              ) {
-                const textWidth = ctx.measureText(label).width;
-                const posX = (source.x + target.x) / 2 - textWidth / 2;
-                const posY = (source.y + target.y) / 2;
-                ctx.fillText(label, posX, posY);
-              }
-            }
-          }}
           onNodeHover={showHighlight ? handleNodeHover : undefined}
           onLinkHover={showHighlight ? handleLinkHover : undefined}
           onNodeClick={handleNodeClick}
           onLinkClick={handleLinkClick}
           backgroundColor={getBackgroundColor()}
-          linkColor={getLinkColor}
+          onZoom={(zoom) => setGraphZoom(zoom.k)}
+          nodeVisibility={(node) => {
+            if (graphZoom < 0.5) {
+              return node.degree > 2; // Only show important nodes when zoomed out
+            }
+            return true;
+          }}
+          linkVisibility={(link) => {
+            if (graphZoom < 0.5) {
+              return typeof link.source === 'object' && 
+                     typeof link.target === 'object' && 
+                     ((link.source as CustomNode).degree > 2 || (link.target as CustomNode).degree > 2);
+            }
+            return true;
+          }}
+          linkDirectionalParticleSpeed={0.01}
+          linkDirectionalParticleWidth={3}
+          linkDirectionalParticleColor={() => '#ffffff'}
         />
       ) : (
         <ForceGraph3D
           ref={graphRef}
           extraRenderers={extraRenderers}
-          graphData={graphData}
+          graphData={graphDataMemo}
           nodeAutoColorBy="type"
           nodeRelSize={NODE_R}
-          linkWidth={(link) =>
-            showHighlight && highlightLinks.has(link) ? 5 : 1
-          }
-          linkDirectionalParticles={showHighlight ? 4 : 0}
-          linkDirectionalParticleWidth={(link) =>
-            showHighlight && highlightLinks.has(link) ? 4 : 0
-          }
+          linkWidth={2}
+          linkDirectionalParticles={4}
+          linkDirectionalParticleWidth={4}
+          linkDirectionalParticleSpeed={0.01}
+          linkDirectionalParticleColor={() => '#ffffff'}
           nodeThreeObject={nodeThreeObject}
-          nodeThreeObjectExtend={true}
+          nodeThreeObjectExtend={false}
           onNodeHover={showHighlight ? handleNodeHover : undefined}
           onLinkHover={showHighlight ? handleLinkHover : undefined}
           onNodeClick={handleNodeClick}
           onLinkClick={handleLinkClick}
           backgroundColor={getBackgroundColor()}
-          linkColor={get3DLinkColor}
-          linkThreeObjectExtend={true}
-          linkThreeObject={(link) => {
-            if (!showLinkLabels) new THREE.Object3D();
-            const sprite = new SpriteText(`${link.type}`);
-            sprite.color = "lightgrey";
-            sprite.textHeight = 1.5;
-            return sprite;
-          }}
-          linkPositionUpdate={(sprite, { start, end }) => {
-            if (!showLinkLabels) return;
-
-            const middlePos = ["x", "y", "z"].reduce((acc, c) => {
-              acc[c as keyof Coords] =
-                start[c as keyof Coords] +
-                (end[c as keyof Coords] - start[c as keyof Coords]) / 2;
-              return acc;
-            }, {} as Coords);
-
-            // Position sprite
-            Object.assign(sprite.position, middlePos);
+          linkColor={() => theme.palette.mode === 'dark' ? '#ffffff' : '#666666'}
+          linkOpacity={0.3}
+          linkCurvature={0.25}
+          showNavInfo={false}
+          rendererConfig={{
+            antialias: true,
+            powerPreference: "high-performance",
+            alpha: true
           }}
         />
       )}
@@ -880,23 +1017,27 @@ const GraphViewer: React.FC<GraphViewerProps> = ({
       >
         <Typography variant="body2">Nodes: {nodeCount}</Typography>
         <Typography variant="body2">Relationships: {linkCount}</Typography>
-        {/* <Button
+        <Button
           variant="contained"
           onClick={toggleApiDrawer(true)}
           startIcon={<SearchIcon />}
         >
-          Ask Query (Local/Global Search)
+          API Search
         </Button>
-        <Button
-          variant="contained"
-          onClick={clearSearchResults}
-          startIcon={<DeleteIcon />}
-          color="warning"
-          disabled={apiSearchResults === null}
-        >
-          Clear Query Results
-        </Button> */}
       </Box>
+      {isLoading && (
+        <Box
+          sx={{
+            position: 'absolute',
+            top: '50%',
+            left: '50%',
+            transform: 'translate(-50%, -50%)',
+            zIndex: 1000
+          }}
+        >
+          <CircularProgress />
+        </Box>
+      )}
     </Box>
   );
 };
