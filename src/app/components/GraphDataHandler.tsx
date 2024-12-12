@@ -134,7 +134,6 @@ const GraphDataHandler: React.FC = () => {
   return (
     <>
       <Tabs value={tabIndex} onChange={handleChange} centered>
-        <Tab label="Upload Artifacts" />
         <Tab label="Graph Visualization" />
         <Tab label="Data Tables" />
       </Tabs>

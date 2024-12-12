@@ -21,7 +21,7 @@ import {
 } from "@mui/material";
 import LightModeOutlinedIcon from "@mui/icons-material/LightModeOutlined";
 import DarkModeOutlinedIcon from "@mui/icons-material/DarkModeOutlined";
-import GitHubIcon from "@mui/icons-material/GitHub";
+
 
 const App: React.FC = () => {
   const [darkMode, setDarkMode] = useState(true);
@@ -96,15 +96,7 @@ const App: React.FC = () => {
               padding: { xs: "20px 0px", sm: "0" },
             }}
           >
-            <IconButton
-              component={Link}
-              href="https://github.com/noworneverev/graphrag-visualizer"
-              target="_blank"
-              rel="noopener"
-              color="inherit"
-            >
-              <GitHubIcon />
-            </IconButton>
+
             {darkMode ? (
               <Tooltip title="Turn on the light">
                 <IconButton onClick={handleThemeChange} color="inherit">
@@ -120,11 +112,10 @@ const App: React.FC = () => {
             )}
           </Box>
           <Routes>
-            <Route path="/" element={<Navigate to="/upload" replace />} />{" "}
-            <Route path="/upload" element={<GraphDataHandler />} />{" "}
+            <Route path="/" element={<Navigate to="/graph" replace />} />{" "}
             <Route path="/graph" element={<GraphDataHandler />} />{" "}
             <Route path="/data" element={<GraphDataHandler />} />{" "}
-            <Route path="*" element={<Navigate to="/upload" replace />} />{" "}
+            <Route path="*" element={<Navigate to="/graph" replace />} />{" "}
           </Routes>
 
           {/* <GraphDataHandler /> */}
